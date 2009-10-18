@@ -1,0 +1,18 @@
+#summary Download and Installation Instructions
+
+== Obtaining Magnum ==
+
+svn checkout http://magnum-py.googlecode.com/svn/trunk/ magnum
+
+
+== Running Magnum ==
+
+# Modify config.py to suit your needs
+# If you need objects in shared memory, modify shared.py to suit your needs
+# Put magnum's parent directory in you PYTHONPATH environment variable
+# ./magum/serve.py start
+
+
+== Documentation ==
+
+Coming Soon
