@@ -1,11 +1,11 @@
 #summary Download and Installation Instructions
 
-== Obtaining Magnum ==
+= Obtaining Magnum =
 
 svn checkout http://magnum-py.googlecode.com/svn/trunk/ magnum
 
 
-== Running Magnum ==
+= Running Magnum =
 
 # Modify config.py to suit your needs
 # If you need objects in shared memory, modify shared.py to suit your needs
@@ -13,6 +13,6 @@ svn checkout http://magnum-py.googlecode.com/svn/trunk/ magnum
 # ./magum/serve.py start
 
 
-== Documentation ==
+= Documentation =
 
 Coming Soon
