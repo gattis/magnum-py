@@ -1,23 +1,16 @@
 from datetime import datetime
-from cStringIO import StringIO as StringBuffer
+from cStringIO import StringIO
 
 
 class Parser(object):
 
-
-
-    def __init__(self,request_string):
-        self.request_string = request_string
+    def __init__(self,head,body):
+        self.head = head
+        self.body = body
 
     def parse(self):
         
-        lines = self.request_string.split("\r\n")
-        try: blank_line = lines.index('')
-        except: return None
-        
-        heading = lines[:blank_line]
-        body = lines[blank_line+1:]
-    
+        heading = self.head.split("\r\n")
         command = heading[0].split()
         version = (0,9)
         if len(command) == 3:
@@ -34,7 +27,6 @@ class Parser(object):
             method, path = command
             if method != "GET": return None
         else: return None
-
     
         headers = {}
         for header in heading[1:]:
@@ -45,19 +37,20 @@ class Parser(object):
             elif len(parts) == 1:
                 headers[parts[0]] = ''
             else: return None
-           
 
-        return Request(method, path, version, headers, '\r\n'.join(body))
+        return Request(method, path, version, headers, self.body)
 
 
 class Request(object):
 
-    def __init__(self, method = "GET", path = "/", version = (1,0), headers = None, body = ""):
+    def __init__(self, method = "GET", path = "/", version = (1,0), headers = None, body = "", remote_addr = None, remote_port = None):
         self.method = method
         self.path = path
         self.version = version
         self.headers = headers if type(headers) == dict else {}
         self.body = body
+        self.remote_addr = remote_addr
+        self.remote_port = remote_port
 
 
 
@@ -93,7 +86,7 @@ class Response(object):
         self.headers["Content-Length"] = len(self.body)
         
     def output(self):
-        out = StringBuffer()
+        out = StringIO()
         out.write("HTTP/")
         out.write('.'.join(map(str,self.version)))
         out.write(" %s\r\n" % self.code)
