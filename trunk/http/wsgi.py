@@ -29,6 +29,7 @@ class WSGIHandler(http.Handler):
                    "CONTENT_LENGTH": self.request.headers.get('content-length',''),
                    "SERVER_NAME": config.HOST[0],
                    "SERVER_PORT": config.HOST[1],
+                   "REMOTE_ADDR": self.request.remote_addr,
                    "wsgi.version": (1,0),
                    "wsgi.url_scheme": "http",
                    "wsgi.input": StringIO(self.request.body),
