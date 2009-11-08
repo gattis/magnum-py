@@ -75,7 +75,6 @@ class Handler(object):
         return Response("200 OK", self.request.version, headers, "This website is proudly served by the Magnum Web Server\n")
         
 
-
 class Response(object):
 
     def __init__(self, code = "200 OK", version = (1,0), headers = None, body = ''):
@@ -96,7 +95,10 @@ class Response(object):
         out.write(self.body)
         return out.getvalue()
 
-
+class Http301Response(Response):
+    def __init__(self,location, body = '', version = (1,1), headers = None):
+        Response.__init__(self, code = "301 Moved Permanently", version = version, headers = headers, body = body)
+        self.headers['Location'] = location
 
 class Http400Response(Response):
     def __init__(self,body = '', version = (1,1), headers = None):
