@@ -83,9 +83,7 @@ def serve_socket_requests(work_queue,completed_queue,shutdown_flag):
                         connections[cfileno] = connection
                         requests[cfileno] = RawHTTPData(address)
                 except socket.error, e:
-                    code,message = e.args
-                    if code != 11: 
-                        connection.shutdown(socket.SHUT_RDWR)
+                    pass
 
             elif event & select.EPOLLHUP:
                 epoll.unregister(fileno)
@@ -99,13 +97,15 @@ def serve_socket_requests(work_queue,completed_queue,shutdown_flag):
                     while True:
                         incoming = connection.recv(1024)
                         if len(incoming) == 0:
-                            connection.shutdown(socket.SHUT_RDWR)
+                            try: connection.shutdown(socket.SHUT_RDWR)
+                            except socket.error: pass
                             break
                         request.write(incoming)
                 except socket.error, e:
                     code,message = e.args
-                    if code != 11: 
-                        connection.shutdown(socket.SHUT_RDWR)
+                    if code != 11:
+                        try: connection.shutdown(socket.SHUT_RDWR)
+                        except socket.error: pass
 
                 if request.complete():
                     work_queue.put((fileno,request.head.getvalue(),request.body.getvalue(),request.address))
@@ -127,7 +127,8 @@ def serve_socket_requests(work_queue,completed_queue,shutdown_flag):
                 except socket.error, e:
                     code,message = e.args
                     if code != 11:
-                        connection.shutdown(socket.SHUT_RDWR)
+                        try: connection.shutdown(socket.SHUT_RDWR)
+                        except socket.error: pass
                     response.seek(rpos)
                 if len(chunk) == 0:
                     del responses[fileno]
@@ -135,9 +136,9 @@ def serve_socket_requests(work_queue,completed_queue,shutdown_flag):
                         epoll.modify(fileno,  select.EPOLLIN | select.EPOLLET)
                     else:
                         epoll.modify(fileno, select.EPOLLET)
-                        connections[fileno].shutdown(socket.SHUT_RDWR)
+                        try: connections[fileno].shutdown(socket.SHUT_RDWR)
+                        except socket.error: pass
                         del requests[fileno]
-
 
     epoll.unregister(serversocket.fileno())
     epoll.close()
