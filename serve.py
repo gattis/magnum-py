@@ -1,10 +1,9 @@
 #!/usr/bin/env python
 
-import socket, select, thread, sys, signal, os, atexit, traceback, time
+import socket, select, sys, signal, os, atexit, traceback, time
 from cStringIO import StringIO
-from multiprocessing import Queue,Value,Pool
 
-from magnum import config,shared
+from magnum import config,shared,ipc
 from magnum.http import Parser,Http400Response,Http500Response
 
 class RawHTTPData(object):
@@ -54,7 +53,7 @@ class RawHTTPData(object):
         return self.active_buffer == self.body and self.body.tell() >= self.content_length
         
 
-def serve_socket_requests(work_queue,completed_queue,shutdown_flag):
+def serve_socket_requests(work_queue,shutdown_flag):
 
     serversocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     serversocket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -64,11 +63,11 @@ def serve_socket_requests(work_queue,completed_queue,shutdown_flag):
 
     epoll = select.epoll()
     epoll.register(serversocket.fileno(), select.EPOLLIN | select.EPOLLET)
+    work_queue.epoll_register(epoll)
 
     connections = {}; requests = {}; responses = {};
-    thread.start_new_thread(watch_completed_queue, (completed_queue,responses,epoll,shutdown_flag))
 
-    while not shutdown_flag.value:
+    while not shutdown_flag.is_set():
         try: events = epoll.poll(1)
         except IOError: break
 
@@ -83,7 +82,16 @@ def serve_socket_requests(work_queue,completed_queue,shutdown_flag):
                         connections[cfileno] = connection
                         requests[cfileno] = RawHTTPData(address)
                 except socket.error, e:
-                    pass
+                    code,message = e.args
+                    if code != 11: 
+                        connection.shutdown(socket.SHUT_RDWR)
+
+            elif fileno == work_queue.response_rfd:
+                completed = work_queue.get_response()
+                if completed != None:
+                    cfileno, response, keep_alive = completed
+                    responses[cfileno] = (StringIO(response), keep_alive)
+                    epoll.modify(cfileno, select.EPOLLOUT | select.EPOLLET)
 
             elif event & select.EPOLLHUP:
                 epoll.unregister(fileno)
@@ -97,24 +105,21 @@ def serve_socket_requests(work_queue,completed_queue,shutdown_flag):
                     while True:
                         incoming = connection.recv(1024)
                         if len(incoming) == 0:
-                            try: connection.shutdown(socket.SHUT_RDWR)
-                            except socket.error: pass
+                            connection.shutdown(socket.SHUT_RDWR)
                             break
                         request.write(incoming)
                 except socket.error, e:
                     code,message = e.args
-                    if code != 11:
-                        try: connection.shutdown(socket.SHUT_RDWR)
-                        except socket.error: pass
+                    if code != 11: 
+                        connection.shutdown(socket.SHUT_RDWR)
 
                 if request.complete():
-                    work_queue.put((fileno,request.head.getvalue(),request.body.getvalue(),request.address))
+                    work_queue.submit_request(fileno,request.address,request.head.getvalue(),request.body.getvalue())
                     request.reset()
 
             elif event & select.EPOLLOUT:
                 
-                response = responses.get(fileno)
-                if response == None: continue
+                response,keep_alive = responses[fileno]
                 rpos = response.tell()
                 chunk = response.read()
                 connection = connections[fileno]
@@ -127,62 +132,51 @@ def serve_socket_requests(work_queue,completed_queue,shutdown_flag):
                 except socket.error, e:
                     code,message = e.args
                     if code != 11:
-                        try: connection.shutdown(socket.SHUT_RDWR)
-                        except socket.error: pass
+                        connection.shutdown(socket.SHUT_RDWR)
                     response.seek(rpos)
                 if len(chunk) == 0:
                     del responses[fileno]
-                    if "keep-alive" in response.getvalue():
+                    if keep_alive:
                         epoll.modify(fileno,  select.EPOLLIN | select.EPOLLET)
                     else:
                         epoll.modify(fileno, select.EPOLLET)
-                        try: connections[fileno].shutdown(socket.SHUT_RDWR)
-                        except socket.error: pass
+                        connections[fileno].shutdown(socket.SHUT_RDWR)
                         del requests[fileno]
+
 
     epoll.unregister(serversocket.fileno())
     epoll.close()
     serversocket.close()
 
 
-def watch_completed_queue(completed_queue,responses,epoll,shutdown_flag):
-    while not shutdown_flag.value:
-        fileno, response_string = completed_queue.get(block = True)
-        responses[fileno] = StringIO(response_string)
-        try:
-            epoll.modify(fileno, select.EPOLLOUT | select.EPOLLET)
-        except IOError:
-            pass
-            
-            
 
-def worker(work_queue,completed_queue,shutdown_flag):
+def worker(work_queue,shutdown_flag):
 
-    while not shutdown_flag.value:
-        fileno, head, body, address = work_queue.get(block = True)
-        if fileno == -1: return
+    while not shutdown_flag.is_set():
+        fileno, address, head, body = work_queue.get_request()
+        if fileno == 0: return
             
         parser = Parser(head,body)
         request = parser.parse()
         if request == None:
             response = Http400Response().output()
         else:
-            addr,port = address
-            request.remote_addr = addr
-            request.remote_port = port
+            request.remote_addr, request.remote_port = address
+            request._work_queue = work_queue
             log("%s - %s" %( request.remote_addr, request.path ))
             handler = config.HANDLER_CLASS(request)
             try:
-                response = handler.response().output()
+                response = handler.response()
             except:
                 exc = traceback.format_exc()
                 log(exc)
                 if config.DEBUG:
-                    response = exc
+                    response = Http500Response(exc)
                 else:
-                    response = Http500Response().output()
+                    response = Http500Response()
             
-        completed_queue.put((fileno,response))
+
+        work_queue.submit_response(fileno,response)
 
 
 
@@ -210,15 +204,13 @@ def daemonize():
     err_redir = open(config.LOG_FILE,'a',0)
     os.dup2(err_redir.fileno(),sys.stderr.fileno())
 
-    atexit.register(lambda: os.remove(config.PID_FILE))
     open(config.PID_FILE,'w').write("%d" % os.getpid())
 
 
 def cleanup(workerpool,work_queue,shutdown_flag):
     log("shutting down")
-    shutdown_flag.value = 1
-    for i in xrange(config.WORKERS): work_queue.put((-1,None,None,None))
-    workerpool.close()
+    shutdown_flag.set()
+    for i in xrange(config.WORKERS): work_queue.submit_request(0,0,'','')
     workerpool.join()
     
 
@@ -234,16 +226,17 @@ def start():
     daemonize()
     log("server started")
 
-    shutdown_flag = Value('b',0)
-    work_queue = Queue()
-    completed_queue = Queue()
+    shutdown_flag = ipc.Flag()
+    work_queue = ipc.WorkQueue()
     shared.instantiate()
 
-    workerpool = Pool(processes = config.WORKERS, initializer = worker, initargs = (work_queue,completed_queue,shutdown_flag))
+    workerpool = ipc.ProcessPool(config.WORKERS, worker, (work_queue,shutdown_flag))
 
+    atexit.register(lambda: os.remove(config.PID_FILE))
     signal.signal(signal.SIGTERM, lambda signum, stack_frame: cleanup(workerpool,work_queue,shutdown_flag))
+
     try:
-        serve_socket_requests(work_queue,completed_queue,shutdown_flag)
+        serve_socket_requests(work_queue,shutdown_flag)
     except:
         print "Fatal Exception:"
         traceback.print_exc()
@@ -255,10 +248,13 @@ def stop():
         fpid = open(config.PID_FILE,'r')
         fpid = int(fpid.read())
         
-        try: os.kill(fpid, signal.SIGTERM)
-        except: pass
+        while True:
+            try: os.kill(fpid, signal.SIGTERM)
+            except OSError: break
+            time.sleep(0.2)
+            
         print "Stopped."
-    except:
+    except IOError:
         print "Not running!"
     
     
