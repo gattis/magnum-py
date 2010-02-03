@@ -91,8 +91,10 @@ def serve_socket_requests(work_queue,shutdown_flag):
                 completed = work_queue.get_response()
                 if completed != None:
                     cfileno, response, keep_alive = completed
-                    responses[cfileno] = (StringIO(response), keep_alive)
-                    epoll.modify(cfileno, select.EPOLLOUT | select.EPOLLET)
+                    try: 
+                        epoll.modify(cfileno, select.EPOLLOUT | select.EPOLLET)
+                        responses[cfileno] = (StringIO(response), keep_alive)
+                    except: pass
 
             elif event & select.EPOLLHUP:
                 epoll.unregister(fileno)
@@ -163,7 +165,7 @@ def worker(work_queue,shutdown_flag):
         parser = Parser(head,body)
         request = parser.parse()
         if request == None:
-            response = Http400Response().output()
+            response = Http400Response()
         else:
             request.remote_addr, request.remote_port = address
             request._work_queue = work_queue
