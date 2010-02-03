@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 
-import socket, select, sys, signal, os, atexit, traceback, time
+import socket, select, sys, signal, os, atexit, traceback, thread, time
 from cStringIO import StringIO
 
 from magnum import config,shared,ipc
@@ -155,12 +155,21 @@ def serve_socket_requests(work_queue,shutdown_flag):
     serversocket.close()
 
 
+def worker_process(work_queue,shutdown_flag):
+    for i in xrange(config.WORKER_THREADS_PER_PROCESS):
+        thread.start_new_thread(worker_thread, (work_queue, shutdown_flag))
+    try:
+        while True: time.sleep(1)
+    except: return
 
-def worker(work_queue,shutdown_flag):
+
+def worker_thread(work_queue,shutdown_flag):
 
     while not shutdown_flag.is_set():
         fileno, address, head, body = work_queue.get_request()
-        if fileno == 0: return
+        if fileno == 0: 
+            thread.interrupt_main()
+            return
             
         parser = Parser(head,body)
         request = parser.parse()
@@ -216,7 +225,8 @@ def daemonize():
 def cleanup(workerpool,work_queue,shutdown_flag):
     log("shutting down")
     shutdown_flag.set()
-    for i in xrange(config.WORKERS): work_queue.submit_request(0,0,'','')
+    for i in xrange(config.WORKER_PROCESSES * config.WORKER_THREADS_PER_WORKER): 
+        work_queue.submit_request(0,0,'','')
     workerpool.join()
     
 
@@ -236,7 +246,7 @@ def start():
     work_queue = ipc.WorkQueue()
     shared.instantiate()
 
-    workerpool = ipc.ProcessPool(config.WORKERS, worker, (work_queue,shutdown_flag))
+    workerpool = ipc.ProcessPool(config.WORKER_PROCESSES, worker_process, (work_queue,shutdown_flag))
 
     atexit.register(lambda: os.remove(config.PID_FILE))
     signal.signal(signal.SIGTERM, lambda signum, stack_frame: cleanup(workerpool,work_queue,shutdown_flag))
