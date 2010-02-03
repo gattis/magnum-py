@@ -6,7 +6,8 @@
 # import magnum.http.static
 # import magnum.http.dispatch
 
-# WORKERS = 10
+# WORKER_PROCESSES = 8
+# WORKER_THREADS_PER_PROCESS = 20
 # HOST = ('localhost', 80)
 # HANDLER_CLASS = magnum.http.dispatch.HostDispatchWrapper(
 #     {"domainname.com": magnum.http.dispatch.PathDispatchWrapper({
