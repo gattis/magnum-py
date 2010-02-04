@@ -225,7 +225,7 @@ def daemonize():
 def cleanup(workerpool,work_queue,shutdown_flag):
     log("shutting down")
     shutdown_flag.set()
-    for i in xrange(config.WORKER_PROCESSES * config.WORKER_THREADS_PER_WORKER): 
+    for i in xrange(config.WORKER_PROCESSES * config.WORKER_THREADS_PER_PROCESS): 
         work_queue.submit_request(0,0,'','')
     workerpool.join()
     
