@@ -1,6 +1,53 @@
 from datetime import datetime
 from cStringIO import StringIO
 
+class RawHTTPData(object):
+
+    def __init__(self, address):
+        self.address = address
+        self.head = StringIO()
+        self.body = StringIO()
+        self.active_buffer = self.head
+        self.content_length = 0
+
+    def write(self,bytes):
+        if self.active_buffer == self.head:
+            end = bytes.find('\r\n\r\n')
+            if end < 0:
+                self.head.write(bytes)
+                return 
+
+            self.head.write(bytes[:end])
+            head_str = self.head.getvalue()
+            self.active_buffer = self.body
+
+            content_length_start = head_str.find("Content-Length:")
+            if content_length_start < 0: return
+
+            content_length_end = head_str.find("\r\n",content_length_start)
+            try:
+                self.content_length = int(head_str[content_length_start+15:content_length_end])
+            except: return
+
+            if self.content_length > 0:
+                self.body.write(bytes[end+4:end+4+self.content_length])
+        else:
+            nbytes = self.content_length - self.body.tell()
+            if nbytes > 0:
+                self.body.write(bytes[:nbytes])
+    
+    def reset(self):
+        self.head.reset()
+        self.head.truncate()
+        self.body.reset()
+        self.body.truncate()
+        self.active_buffer = self.head
+        self.content_length = 0
+        
+    def complete(self):
+        return self.active_buffer == self.body and self.body.tell() >= self.content_length
+
+
 
 class Parser(object):
 
@@ -72,7 +119,7 @@ class Handler(object):
             headers.update({"Keep-Alive" : "timeout=600, max=100",
                             "Connection" : "Keep-Alive"})
     
-        return Response("200 OK", self.request.version, headers, "This website is proudly served by the Magnum Web Server\n")
+        return Response("200 OK", self.request.version, headers, "This website is proudly served by the Magnum Web Server\r\n")
         
 
 class Response(object):

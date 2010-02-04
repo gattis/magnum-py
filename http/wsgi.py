@@ -1,4 +1,4 @@
-from io import StringIO
+from cStringIO import StringIO
 import sys
 
 from magnum import http
@@ -28,7 +28,7 @@ class WSGIHandler(http.Handler):
                    "CONTENT_TYPE": self.request.headers.get('content-type',''),
                    "CONTENT_LENGTH": self.request.headers.get('content-length',''),
                    "SERVER_NAME": config.HOST[0],
-                   "SERVER_PORT": config.HOST[1],
+                   "SERVER_PORT": str(config.HOST[1]),
                    "REMOTE_ADDR": self.request.remote_addr,
                    "wsgi.version": (1,0),
                    "wsgi.url_scheme": "http",

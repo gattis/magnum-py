@@ -4,54 +4,8 @@ import socket, select, sys, signal, os, atexit, traceback, thread, time
 from cStringIO import StringIO
 
 from magnum import config,shared,ipc
-from magnum.http import Parser,Http400Response,Http500Response
+from magnum.http import RawHTTPData, Parser, Http400Response, Http500Response
 
-class RawHTTPData(object):
-
-    def __init__(self, address):
-        self.address = address
-        self.head = StringIO()
-        self.body = StringIO()
-        self.active_buffer = self.head
-        self.content_length = 0
-
-    def write(self,bytes):
-        if self.active_buffer == self.head:
-            end = bytes.find('\r\n\r\n')
-            if end < 0:
-                self.head.write(bytes)
-                return 
-
-            self.head.write(bytes[:end])
-            head_str = self.head.getvalue()
-            self.active_buffer = self.body
-
-            content_length_start = head_str.find("Content-Length:")
-            if content_length_start < 0: return
-
-            content_length_end = head_str.find("\r\n",content_length_start)
-            try:
-                self.content_length = int(head_str[content_length_start+15:content_length_end])
-            except: return
-
-            if self.content_length > 0:
-                self.body.write(bytes[end+4:end+4+self.content_length])
-        else:
-            nbytes = self.content_length - self.body.tell()
-            if nbytes > 0:
-                self.body.write(bytes[:nbytes])
-    
-    def reset(self):
-        self.head.reset()
-        self.head.truncate()
-        self.body.reset()
-        self.body.truncate()
-        self.active_buffer = self.head
-        self.content_length = 0
-        
-    def complete(self):
-        return self.active_buffer == self.body and self.body.tell() >= self.content_length
-        
 
 def serve_socket_requests(work_queue,shutdown_flag):
 
@@ -61,29 +15,33 @@ def serve_socket_requests(work_queue,shutdown_flag):
     serversocket.listen(511)
     serversocket.setblocking(0)
 
-    epoll = select.epoll()
-    epoll.register(serversocket.fileno(), select.EPOLLIN | select.EPOLLET)
-    work_queue.epoll_register(epoll)
+    trigger = ipc.EdgeTrigger(serversocket.fileno(), work_queue.response_rfd)
 
     connections = {}; requests = {}; responses = {};
 
     while not shutdown_flag.is_set():
-        try: events = epoll.poll(1)
-        except IOError: break
-
+        events = trigger.events(1)
         for fileno, event in events:
-            if fileno == serversocket.fileno():
+
+            if trigger.is_shutdown(event):
+                trigger.unregister(fileno,event)
+                try:
+                    connections[fileno].close()
+                    del connections[fileno]
+                except: pass
+
+            elif fileno == serversocket.fileno():
                 try:
                     while True:
                         connection, address = serversocket.accept()
                         connection.setblocking(0)
                         cfileno = connection.fileno()
-                        epoll.register(cfileno, select.EPOLLIN | select.EPOLLET)
+                        trigger.register(cfileno)
                         connections[cfileno] = connection
                         requests[cfileno] = RawHTTPData(address)
                 except socket.error, e:
                     code,message = e.args
-                    if code != 11:
+                    if trigger.is_fatal(code):
                         try: connection.shutdown(socket.SHUT_RDWR)
                         except socket.error: pass
 
@@ -92,14 +50,9 @@ def serve_socket_requests(work_queue,shutdown_flag):
                 if completed != None:
                     cfileno, response, keep_alive = completed
                     try: 
-                        epoll.modify(cfileno, select.EPOLLOUT | select.EPOLLET)
+                        trigger.modify_to_write(cfileno)
                         responses[cfileno] = (StringIO(response), keep_alive)
                     except: pass
-
-            elif event & select.EPOLLHUP:
-                epoll.unregister(fileno)
-                connections[fileno].close()
-                del connections[fileno]
 
             elif event & select.EPOLLIN:
                 connection = connections[fileno]
@@ -120,7 +73,8 @@ def serve_socket_requests(work_queue,shutdown_flag):
                 if request.complete():
                     work_queue.submit_request(fileno,request.address,request.head.getvalue(),request.body.getvalue())
                     request.reset()
-
+                    trigger.stop_reads(fileno)
+                    
             elif event & select.EPOLLOUT:
                 
                 response,keep_alive = responses[fileno]
@@ -135,23 +89,21 @@ def serve_socket_requests(work_queue,shutdown_flag):
                         chunk = response.read()
                 except socket.error, e:
                     code,message = e.args
-                    if code != 11:
+                    if trigger.is_fatal(code):
                         try: connection.shutdown(socket.SHUT_RDWR)
                         except socket.error: pass
                     response.seek(rpos)
                 if len(chunk) == 0:
                     del responses[fileno]
+                    trigger.stop_writes(fileno)
                     if keep_alive:
-                        epoll.modify(fileno,  select.EPOLLIN | select.EPOLLET)
+                        trigger.modify_to_read(fileno)
                     else:
-                        epoll.modify(fileno, select.EPOLLET)
                         try: connections[fileno].shutdown(socket.SHUT_RDWR)
                         except socket.error: pass
                         del requests[fileno]
 
-
-    epoll.unregister(serversocket.fileno())
-    epoll.close()
+    trigger.close(serversocket.fileno())
     serversocket.close()
 
 
@@ -189,11 +141,8 @@ def worker_thread(work_queue,shutdown_flag):
                     response = Http500Response(exc)
                 else:
                     response = Http500Response()
-            
 
         work_queue.submit_response(fileno,response)
-
-
 
 
 def log(message):

@@ -88,8 +88,6 @@ class WorkQueue(object):
     def get_response(self):
         return self.response_reader.read()
 
-    def epoll_register(self, epoll):
-        epoll.register(self.response_rfd, select.EPOLLIN | select.EPOLLET)
 
 
 class ResponseReader(object):
@@ -129,6 +127,77 @@ class ResponseReader(object):
                 self.id = self.len = None
                 return id,response,keep_alive == '\x01'
         return None
+
+class EdgeTrigger(object):
+    
+    def __init__(self, socket_fd, queue_fd):
+        if hasattr(select,'epoll'): self.is_epoll = True
+        elif hasattr(select,'kqueue'): self.is_epoll = True
+        else: raise Exception("Your operating system must support epoll or kqueue")
+        if self.is_epoll:
+            self.trigger = select.epoll()
+            self.trigger.register(socket_fd, select.EPOLLIN | select.EPOLLET)
+            self.trigger.register(queue_fd, select.EPOLLIN | select.EPOLLET)
+        else:
+            self.trigger = select.kqueue()
+            self.trigger.control([select.kevent(socket_fd, select.KQ_FILTER_READ, select.KQ_EV_ADD)],0)
+            self.trigger.control([select.kevent(queue_fd, select.KQ_FILTER_READ, select.KQ_EV_ADD)],0)
+            
+            
+    def events(self, nevents):
+        if self.is_epoll:
+            try: return self.trigger.poll(nevents)
+            except IOError: return []
+        else:
+            return [(e.ident,(e.filter,e.flags)) for e in kqueue.control(None,1)]
+
+    def modify_to_write(self, fileno):
+        if self.is_epoll: self.trigger.modify(fileno, select.EPOLLOUT | select.EPOLLET)
+        else: self.trigger.control([select.kevent(fileno, select.KQ_FILTER_WRITE, select.KQ_EV_ADD)],0)
+
+    def modify_to_read(self, fileno):
+        if self.is_epoll: self.trigger.modify(fileno,  select.EPOLLIN | select.EPOLLET)
+        else: self.trigger.control([select.kevent(fileno, select.KQ_FILTER_READ, select.KQ_EV_ADD)],0)
+
+    def stop_reads(self, fileno):
+        if self.is_epoll: self.trigger.modify(fileno, select.EPOLLET)
+        else: self.trigger.control([select.kevent(fileno, select.KQ_FILTER_READ, select.KQ_EV_DELETE)],0)
+
+    def stop_writes(self, fileno):
+        if self.is_epoll: self.trigger.modify(fileno, select.EPOLLET)
+        else: self.trigger.control([select.kevent(fileno, select.KQ_FILTER_WRITE, select.KQ_EV_DELETE)],0)
+
+    def register(self, fileno):
+        if self.is_epoll: self.trigger.register(fileno, select.EPOLLIN | select.EPOLLET)
+        else: self.trigger.control([select.kevent(fileno, select.KQ_FILTER_READ, select.KQ_EV_ADD)],0)
+
+    def unregister(self, fileno, event):
+        if self.is_epoll:
+            self.trigger.unregister(fileno)
+        else:
+            filter,flags = event
+            if filter == select.KQ_FILTER_READ:
+                self.trigger.control([select.kevent(fileno, select.KQ_FILTER_READ, select.KQ_EV_DELETE)],0)
+            elif filter == select.KQ_FILTER_WRITE:
+                self.trigger.control([select.kevent(fileno, select.KQ_FILTER_WRITE, select.KQ_EV_DELETE)],0)
+
+    def is_shutdown(self, event):
+        if self.is_epoll:
+            return event & select.EPOLLHUP
+        else:
+            filter,flags = event
+            return flags & select.KQ_EV_EOF
+
+    def is_fatal(self, error_code):
+        if self.is_epoll:
+            return error_code != 11
+        else:
+            return error_code != 35
+
+    def close(self, socket_fd):
+        if self.is_epoll: self.trigger.unregister(socket_fd)
+        else: self.trigger.control([select.kevent(socket_fd, select.KQ_FILTER_READ, select.KQ_EV_DELETE)],0)
+        self.trigger.close()
                 
 
 class ProcessPool(object):
