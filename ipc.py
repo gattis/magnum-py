@@ -132,7 +132,7 @@ class EdgeTrigger(object):
     
     def __init__(self, socket_fd, queue_fd):
         if hasattr(select,'epoll'): self.is_epoll = True
-        elif hasattr(select,'kqueue'): self.is_epoll = True
+        elif hasattr(select,'kqueue'): self.is_epoll = False
         else: raise Exception("Your operating system must support epoll or kqueue")
         if self.is_epoll:
             self.trigger = select.epoll()
@@ -149,7 +149,7 @@ class EdgeTrigger(object):
             try: return self.trigger.poll(nevents)
             except IOError: return []
         else:
-            return [(e.ident,(e.filter,e.flags)) for e in kqueue.control(None,1)]
+            return [(e.ident,(e.filter,e.flags)) for e in self.trigger.control(None,1)]
 
     def modify_to_write(self, fileno):
         if self.is_epoll: self.trigger.modify(fileno, select.EPOLLOUT | select.EPOLLET)
@@ -171,19 +171,41 @@ class EdgeTrigger(object):
         if self.is_epoll: self.trigger.register(fileno, select.EPOLLIN | select.EPOLLET)
         else: self.trigger.control([select.kevent(fileno, select.KQ_FILTER_READ, select.KQ_EV_ADD)],0)
 
-    def unregister(self, fileno, event):
+    def handle_hup(self, fileno, event, connections):
         if self.is_epoll:
             self.trigger.unregister(fileno)
+            try:
+                connections[fileno].close()
+                del connections[fileno]
+            except: pass
         else:
             filter,flags = event
             if filter == select.KQ_FILTER_READ:
                 self.trigger.control([select.kevent(fileno, select.KQ_FILTER_READ, select.KQ_EV_DELETE)],0)
             elif filter == select.KQ_FILTER_WRITE:
                 self.trigger.control([select.kevent(fileno, select.KQ_FILTER_WRITE, select.KQ_EV_DELETE)],0)
+            
+    def terminate(self, fileno, connections):
+        if self.is_epoll: return
+        try:
+            connections[fileno].close()
+            del connections[fileno]
+        except: pass
 
-    def is_shutdown(self, event):
-        if self.is_epoll:
-            return event & select.EPOLLHUP
+    def is_read(self, event):
+        if self.is_epoll: return event & select.EPOLLIN
+        else:
+            filter,flags = event
+            return filter == select.KQ_FILTER_READ
+
+    def is_write(self, event):
+        if self.is_epoll: return event & select.EPOLLOUT
+        else:
+            filter,flags = event
+            return filter == select.KQ_FILTER_WRITE
+
+    def is_hup(self, event):
+        if self.is_epoll: return event & select.EPOLLHUP
         else:
             filter,flags = event
             return flags & select.KQ_EV_EOF

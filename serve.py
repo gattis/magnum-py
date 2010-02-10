@@ -22,15 +22,11 @@ def serve_socket_requests(work_queue,shutdown_flag):
     while not shutdown_flag.is_set():
         events = trigger.events(1)
         for fileno, event in events:
+            filter,flags = event
+            if trigger.is_hup(event):
+                trigger.handle_hup(fileno,event,connections)
 
-            if trigger.is_shutdown(event):
-                trigger.unregister(fileno,event)
-                try:
-                    connections[fileno].close()
-                    del connections[fileno]
-                except: pass
-
-            elif fileno == serversocket.fileno():
+            if fileno == serversocket.fileno():
                 try:
                     while True:
                         connection, address = serversocket.accept()
@@ -54,7 +50,7 @@ def serve_socket_requests(work_queue,shutdown_flag):
                         responses[cfileno] = (StringIO(response), keep_alive)
                     except: pass
 
-            elif event & select.EPOLLIN:
+            elif trigger.is_read(event):
                 connection = connections[fileno]
                 request = requests[fileno]
                 try:
@@ -66,7 +62,7 @@ def serve_socket_requests(work_queue,shutdown_flag):
                         request.write(incoming)
                 except socket.error, e:
                     code,message = e.args
-                    if code != 11: 
+                    if trigger.is_fatal(code): 
                         try: connection.shutdown(socket.SHUT_RDWR)
                         except socket.error: pass
 
@@ -75,7 +71,7 @@ def serve_socket_requests(work_queue,shutdown_flag):
                     request.reset()
                     trigger.stop_reads(fileno)
                     
-            elif event & select.EPOLLOUT:
+            elif trigger.is_write(event):
                 
                 response,keep_alive = responses[fileno]
                 rpos = response.tell()
@@ -101,7 +97,7 @@ def serve_socket_requests(work_queue,shutdown_flag):
                     else:
                         try: connections[fileno].shutdown(socket.SHUT_RDWR)
                         except socket.error: pass
-                        del requests[fileno]
+                        trigger.terminate(fileno,connections)
 
     trigger.close(serversocket.fileno())
     serversocket.close()
@@ -141,7 +137,6 @@ def worker_thread(work_queue,shutdown_flag):
                     response = Http500Response(exc)
                 else:
                     response = Http500Response()
-
         work_queue.submit_response(fileno,response)
 
 
