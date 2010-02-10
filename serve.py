@@ -22,7 +22,7 @@ def serve_socket_requests(work_queue,shutdown_flag):
     while not shutdown_flag.is_set():
         events = trigger.events(1)
         for fileno, event in events:
-            filter,flags = event
+
             if trigger.is_hup(event):
                 trigger.handle_hup(fileno,event,connections)
 
