@@ -24,7 +24,8 @@ def serve_socket_requests(work_queue,shutdown_flag):
         for fileno, event in events:
 
             if trigger.is_hup(event):
-                trigger.handle_hup(fileno,event,connections)
+                if trigger.handle_hup(fileno,event,connections):
+                    continue
 
             if fileno == serversocket.fileno():
                 try:

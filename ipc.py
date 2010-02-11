@@ -178,12 +178,14 @@ class EdgeTrigger(object):
                 connections[fileno].close()
                 del connections[fileno]
             except: pass
+            return True
         else:
             filter,flags = event
             if filter == select.KQ_FILTER_READ:
                 self.trigger.control([select.kevent(fileno, select.KQ_FILTER_READ, select.KQ_EV_DELETE)],0)
             elif filter == select.KQ_FILTER_WRITE:
                 self.trigger.control([select.kevent(fileno, select.KQ_FILTER_WRITE, select.KQ_EV_DELETE)],0)
+            return False
             
     def terminate(self, fileno, connections):
         if self.is_epoll: return
