@@ -17,5 +17,6 @@
 #                }),
 #     "default": magnum.http.dispatch.RedirectWrapper("http://domainname.com/")})
 # DEBUG = True
+# CACHE = True
 # PID_FILE = '/tmp/magnum.pid'
 # LOG_FILE = '/var/log/magnum.log'
