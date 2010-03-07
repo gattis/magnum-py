@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 from cStringIO import StringIO
 
 class RawHTTPData(object):
@@ -143,9 +143,15 @@ class Response(object):
         return out.getvalue()
 
 class Http301Response(Response):
-    def __init__(self,location, body = '', version = (1,1), headers = None):
+    def __init__(self, location, body = '', version = (1,1), headers = None):
         Response.__init__(self, code = "301 Moved Permanently", version = version, headers = headers, body = body)
         self.headers['Location'] = location
+
+class Http304Response(Response):
+    def __init__(self, max_age = 60*60*24*365, version = (1,1), headers = None):
+        Response.__init__(self, code = "304 Not Modified", version = version, headers = headers)
+        self.headers['Expires'] = (datetime.utcnow()+timedelta(seconds=max_age)).strftime("%a, %d %b %Y %H:%M:%S GMT")
+        self.headers['Cache-Control'] = 'max-age=%d'%max_age
 
 class Http400Response(Response):
     def __init__(self,body = '', version = (1,1), headers = None):
